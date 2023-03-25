@@ -8,10 +8,20 @@
  * Point structure for point data
  */
 typedef struct 
-	{
-		double _x;
-		double _y;
-	} Point;
+{
+	double _x;
+	double _y;
+} Point;
+	
+/**
+ * Data structure for essential data
+ */
+typedef struct
+{
+	int job_size;
+	int num_clusters;
+} Data;
+
 /**
  * reader function of the input file's first(for number of clusters)  
  * & second(for number of points) line
@@ -22,11 +32,20 @@ typedef struct
 void readHeaders(FILE *input,int* num_clusters,int* num_points)
 {
 	fscanf(input,"%d\n",num_clusters);
-	printf("%d\n",*num_clusters);
+	//printf("%d\n",*num_clusters);
 
 	fscanf(input,"%d\n",num_points);
-	printf("%d\n",*num_points);
+	//printf("%d\n",*num_points);
 }
+
+int compare(const void *x, const void *y) {
+  
+    Point *pointA = (Point *)x;
+    Point *pointB = (Point *)y;
+  
+	if(pointA->_y != pointB->_y) return pointA->_y > pointB->_y;
+}
+
 /**
  * reader function of the points in the input file
  * This function must be called after  readHeaders(...) function
@@ -41,22 +60,25 @@ void readPoints(FILE* input,Point *points,int num_points)
 	{
 		fscanf(input,"%lf,%lf",&points[dex]._x,&points[dex]._y);
 	}
+	qsort(points, num_points, sizeof(Point), compare);
 }
+
 /**
  * initializer function that randomly initialize the centroids
  * @param centroids pointer to return array of centroids
  * @param num_cluster number of clusters(so number of centroids, too)
  */
-void initialize(Point* centroids,int num_clusters)
+void initialize(Point* points, Point* centroids,int num_clusters)
 {
 	int dex;
-	srand(time(NULL));
+	int j;
 	for(dex=0;dex<num_clusters;dex++)
 	{
-		centroids[dex]._x=((double)(rand()%1000))/1000;
-		centroids[dex]._y=((double)(2*rand()%1000))/1000;
+		centroids[dex]._x=points[dex]._x;
+		centroids[dex]._y=points[dex]._y;
 	}
 }
+
 /**
  * initializer function that initializes the all cluster array values to -1
  * @param data pointer to return array of cluster data
@@ -194,12 +216,15 @@ int main(int argc, char* argv[])
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 	
 	//creation of derived MPI structure
-	MPI_Datatype MPI_POINT;
+	MPI_Datatype MPI_POINT, MPI_DATA;
 	MPI_Datatype type=MPI_DOUBLE;
-	int blocklen=2;
+	MPI_Datatype data=MPI_INT;
+	int blocklenPoint=2, blocklenData=2;
 	MPI_Aint disp=0;
-	MPI_Type_create_struct(1,&blocklen,&disp,&type,&MPI_POINT);
+	MPI_Type_create_struct(1,&blocklenPoint,&disp,&type,&MPI_POINT);
+	MPI_Type_create_struct(1,&blocklenData,&disp,&data,&MPI_DATA);
 	MPI_Type_commit(&MPI_POINT);
+	MPI_Type_commit(&MPI_DATA);
 
 /******************* MASTER PROCESSOR WORKS HERE******************************************************/ 
     
@@ -224,21 +249,33 @@ int main(int argc, char* argv[])
 		centroids=malloc(sizeof(Point)*num_clusters);
 		
 		//reseting and initializing to default behaviour		
-		initialize(centroids,num_clusters);
+		initialize(points, centroids,num_clusters);
+
+		//for(int i=0; i<num_clusters; i++){
+		//	printf("CENTROIDI: %f, %f\n", centroids[i]._x, centroids[i]._y);
+		//}
+
+
 		resetData(former_clusters,num_points);
 		resetData(latter_clusters,num_points);
+
+		//initalizing and populating the type Data
+		Data data;
+		data.job_size = job_size;
+		data.num_clusters = num_clusters;
+
 		
+
 		//Sending the essential data to slave processors
+		MPI_Bcast(&data, 1, MPI_DATA, MASTER, MPI_COMM_WORLD);
+		MPI_Bcast(centroids, num_clusters, MPI_POINT, MASTER, MPI_COMM_WORLD);
 		for(dex=1;dex<size;dex++)
 		{
-			printf("Sending to [%d]\n",dex);
-			MPI_Send(&job_size              	,1           	, MPI_INT        ,dex,0,MPI_COMM_WORLD);
-			MPI_Send(&num_clusters          	,1           	, MPI_INT        ,dex,0,MPI_COMM_WORLD);
-			MPI_Send(centroids              	,num_clusters	, MPI_POINT      ,dex,0,MPI_COMM_WORLD);
+			//printf("Sending to [%d]\n",dex);
 			MPI_Send(points+(dex-1)*job_size	,job_size    	, MPI_POINT      ,dex,0,MPI_COMM_WORLD);
 		}
 
-        printf("Sent!\n");
+        //printf("Sent!\n");
 
 		MPI_Barrier(MPI_COMM_WORLD);
 
@@ -247,22 +284,22 @@ int main(int argc, char* argv[])
 		{	
             //MPI_Barrier(MPI_COMM_WORLD);
             
-            printf("Master Receiving\n");
+            //printf("Master Receiving\n");
             for(dex=1;dex<size;dex++)
                 MPI_Recv(latter_clusters+(job_size*(dex-1)),job_size,MPI_INT,dex,0,MPI_COMM_WORLD,&status);
             
-            printf("Master Received\n");
+            //printf("Master Received\n");
             
             calculateNewCentroids(points,latter_clusters,centroids,num_clusters,num_points);
-            printf("New Centroids are done!\n");
+            //printf("New Centroids are done!\n");
             if(checkConvergence(latter_clusters,former_clusters,num_points)==0)
             {
-                printf("Converged!\n");
+                //printf("Converged!\n");
                 job_done=1;
             }
             else    
             {
-                printf("Not converged!\n");
+                //printf("Not converged!\n");
                 for(dex=0;dex<num_points;dex++)
                     former_clusters[dex]=latter_clusters[dex];
             }
@@ -295,28 +332,30 @@ int main(int argc, char* argv[])
 	{
 		//Receiving the essential data
 		int flag = 1;
-		printf("Receiving Data from master [%d]\n", rank);
-		MPI_Recv(&job_size    ,1           ,MPI_INT  ,MASTER,0,MPI_COMM_WORLD,&status);
-		MPI_Recv(&num_clusters,1           ,MPI_INT  ,MASTER,0,MPI_COMM_WORLD,&status);
+		Data data;
+		//printf("Receiving Data from master [%d]\n", rank);
+		MPI_Bcast(&data    	,1           ,MPI_DATA  ,MASTER ,MPI_COMM_WORLD);
+		int job_size = data.job_size;
+		int num_clusters = data.num_clusters;
 		centroids=malloc(sizeof(Point)*num_clusters);
-		MPI_Recv(centroids    ,num_clusters,MPI_POINT,MASTER,0,MPI_COMM_WORLD,&status);
-		printf("part_size =%d\n",job_size);
+		MPI_Bcast(centroids    ,num_clusters,MPI_POINT,MASTER, MPI_COMM_WORLD);
+		//printf("part_size =%d\n",job_size);
 		received_points=(Point*)malloc(sizeof(Point)*job_size);
 		slave_clusters=(int*)malloc(sizeof(int)*job_size);
 		MPI_Recv(received_points,job_size,MPI_POINT      ,MASTER,0,MPI_COMM_WORLD,&status);
-		printf("Received [%d]\n",rank);
+		//printf("Received [%d]\n",rank);
 
 		MPI_Barrier(MPI_COMM_WORLD);
 		
 		while(flag == 1)
 		{
-			printf("Calculation of new clusters [%d]\n",rank);
+			//printf("Calculation of new clusters [%d]\n",rank);
 			for(dex=0;dex<job_size;dex++)
 			{
 				slave_clusters[dex]=whoIsYourDaddy(received_points[dex],centroids,num_clusters);
 			}
 			
-			printf("sending to master [%d]\n",rank);
+			//printf("sending to master [%d]\n",rank);
 			MPI_Send(slave_clusters,job_size, MPI_INT,MASTER, 0, MPI_COMM_WORLD);
 			MPI_Barrier(MPI_COMM_WORLD);
 			MPI_Bcast(&job_done, 1, MPI_INT, MASTER, MPI_COMM_WORLD);

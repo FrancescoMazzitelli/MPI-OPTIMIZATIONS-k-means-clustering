@@ -2,6 +2,8 @@
     "files.associations": {
         "math.h": "c",
         "cmath": "c",
-        "*.tcc": "c"
+        "*.tcc": "c",
+        "cstdlib": "c",
+        "stdlib-bsearch.h": "c"
     }
 }
