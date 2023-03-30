@@ -13,8 +13,8 @@ double* create_rand_nums(const int num_elements) {
 }
 
 int main(int argc, char* argv){
-  int num_clusters = 15;
-  int tot_nums = 2592000;
+  int num_clusters = 60;
+  int tot_nums = 648000*2;
   double* random_nums = create_rand_nums(tot_nums);
   FILE* output=fopen("input.txt","w");
   fprintf(output, "%d\n", num_clusters);

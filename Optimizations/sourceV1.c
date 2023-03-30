@@ -203,7 +203,7 @@ int main(int argc, char* argv[])
 	
 	Point* centroids;
 	Point* points;
-	
+	Point* received_points;
 	int  * slave_clusters;
 	int  * former_clusters;
 	int  * latter_clusters;
@@ -229,10 +229,8 @@ int main(int argc, char* argv[])
 /******************* MASTER PROCESSOR WORKS HERE******************************************************/ 
     
     double start_time = MPI_Wtime();
-	double start = time(NULL);
    	if(rank==MASTER)
   	{
-		Point* received_points;
 		int flag = 1;
 		//inputting from file
 		FILE *input;
@@ -246,10 +244,8 @@ int main(int argc, char* argv[])
 		//other needed memory locations
 		former_clusters=(int*)malloc(sizeof(int)*num_points);
 		latter_clusters=(int*)malloc(sizeof(int)*num_points);
-		slave_clusters=(int*)malloc(sizeof(int)*job_size);
-		job_size=num_points/(size);
+		job_size=num_points/(size-1);
 		centroids=malloc(sizeof(Point)*num_clusters);
-		received_points=malloc(sizeof(Point)*num_points);
 		
 		//reseting and initializing to default behaviour		
 		initialize(points, centroids,num_clusters);
@@ -258,44 +254,46 @@ int main(int argc, char* argv[])
 		//	printf("CENTROIDI: %f, %f\n", centroids[i]._x, centroids[i]._y);
 		//}
 
+
 		resetData(former_clusters,num_points);
 		resetData(latter_clusters,num_points);
 
 		//initalizing and populating the type Data
 		Data data;
 		data.job_size = job_size;
-		data.num_clusters = num_clusters;		
+		data.num_clusters = num_clusters;
+
+		
 
 		//Sending the essential data to slave processors
 		MPI_Bcast(&data, 1, MPI_DATA, MASTER, MPI_COMM_WORLD);
 		MPI_Bcast(centroids, num_clusters, MPI_POINT, MASTER, MPI_COMM_WORLD);
-		MPI_Scatter(points, job_size, MPI_POINT, received_points, job_size, MPI_POINT, MASTER, MPI_COMM_WORLD);
+		for(dex=1;dex<size;dex++)
+		{
+			//printf("Sending to [%d]\n",dex);
+			MPI_Send(points+(dex-1)*job_size	,job_size    	, MPI_POINT      ,dex,0,MPI_COMM_WORLD);
+		}
+
+        //printf("Sent!\n");
 
 		MPI_Barrier(MPI_COMM_WORLD);
-		printf("Sent!\n");
 
 		//Main job of master processor is done here		
 		while(flag == 1)
 		{	
-            MPI_Barrier(MPI_COMM_WORLD);
-			printf("Calculation of new clusters [%d]\n",rank);
-			for(dex=0;dex<job_size;dex++)
-			{
-				slave_clusters[dex]=whoIsYourDaddy(received_points[dex],centroids,num_clusters);
-			}
-			MPI_Barrier(MPI_COMM_WORLD);
+            //MPI_Barrier(MPI_COMM_WORLD);
             
-            printf("Gathering clusters [%d]\n",rank);
-            MPI_Gather(slave_clusters, job_size, MPI_INT, latter_clusters, job_size, MPI_INT, MASTER, MPI_COMM_WORLD);
-			MPI_Barrier(MPI_COMM_WORLD);
+            //printf("Master Receiving\n");
+            for(dex=1;dex<size;dex++)
+                MPI_Recv(latter_clusters+(job_size*(dex-1)),job_size,MPI_INT,dex,0,MPI_COMM_WORLD,&status);
             
-            printf("Master Received\n");
+            //printf("Master Received\n");
             
             calculateNewCentroids(points,latter_clusters,centroids,num_clusters,num_points);
-            printf("New Centroids are done!\n");
+            //printf("New Centroids are done!\n");
             if(checkConvergence(latter_clusters,former_clusters,num_points)==0)
             {
-                printf("Converged!\n");
+                //printf("Converged!\n");
                 job_done=1;
             }
             else    
@@ -304,15 +302,15 @@ int main(int argc, char* argv[])
                 for(dex=0;dex<num_points;dex++)
                     former_clusters[dex]=latter_clusters[dex];
             }
-            MPI_Barrier(MPI_COMM_WORLD);
+            
             //Informing slaves that no more job to be done
             MPI_Bcast(&job_done, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
+
             MPI_Barrier(MPI_COMM_WORLD);
             if(job_done==1)
                 flag = 0;
 
-            //Sending the recently created centroids
-			printf("Sending new centroids!\n");		
+            //Sending the recently created centroids			
             MPI_Bcast(centroids, num_clusters, MPI_POINT, MASTER, MPI_COMM_WORLD);
             MPI_Barrier(MPI_COMM_WORLD);
 		}
@@ -333,46 +331,34 @@ int main(int argc, char* argv[])
 	{
 		//Receiving the essential data
 		int flag = 1;
-		Point* received_points;
 		Data data;
-		
-		printf("Receiving Data from master [%d]\n", rank);
+		//printf("Receiving Data from master [%d]\n", rank);
 		MPI_Bcast(&data    	,1           ,MPI_DATA  ,MASTER ,MPI_COMM_WORLD);
 		int job_size = data.job_size;
 		int num_clusters = data.num_clusters;
 		centroids=malloc(sizeof(Point)*num_clusters);
 		MPI_Bcast(centroids    ,num_clusters,MPI_POINT,MASTER, MPI_COMM_WORLD);
-		printf("part_size =%d\n",job_size);
+		//printf("part_size =%d\n",job_size);
 		received_points=(Point*)malloc(sizeof(Point)*job_size);
 		slave_clusters=(int*)malloc(sizeof(int)*job_size);
-		MPI_Scatter(MPI_IN_PLACE, job_size, MPI_POINT, received_points, job_size, MPI_POINT, MASTER, MPI_COMM_WORLD);
-		printf("Received [%d]\n",rank);
+		MPI_Recv(received_points,job_size,MPI_POINT      ,MASTER,0,MPI_COMM_WORLD,&status);
+		//printf("Received [%d]\n",rank);
 
 		MPI_Barrier(MPI_COMM_WORLD);
 		
 		while(flag == 1)
 		{
-			//Let all processes enter their WHILE loop
-			MPI_Barrier(MPI_COMM_WORLD);
-			printf("Calculation of new clusters [%d]\n",rank);
+			//printf("Calculation of new clusters [%d]\n",rank);
 			for(dex=0;dex<job_size;dex++)
 			{
 				slave_clusters[dex]=whoIsYourDaddy(received_points[dex],centroids,num_clusters);
 			}
-			MPI_Barrier(MPI_COMM_WORLD);
 			
-			printf("Gathering clusters [%d]\n",rank);
-			//MPI_Send(slave_clusters,job_size, MPI_INT,MASTER, 0, MPI_COMM_WORLD);
-			MPI_Gather(slave_clusters, job_size, MPI_INT, latter_clusters, job_size, MPI_INT, MASTER, MPI_COMM_WORLD);
+			//printf("sending to master [%d]\n",rank);
+			MPI_Send(slave_clusters,job_size, MPI_INT,MASTER, 0, MPI_COMM_WORLD);
 			MPI_Barrier(MPI_COMM_WORLD);
-
-			//Let Master check for convergence
-			MPI_Barrier(MPI_COMM_WORLD);
-
-			//Control if job is done
 			MPI_Bcast(&job_done, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
-			MPI_Barrier(MPI_COMM_WORLD);
-
+				
 			if(job_done==1) //No more work to be done
 				flag = 0;
 			
@@ -383,9 +369,7 @@ int main(int argc, char* argv[])
 	}
 	//End of all	
     double end_time = MPI_Wtime();
-	double end = time(NULL);
 	printf("MPI: Elapsed time: %f\n", end_time - start_time);
-	printf("LIBRARY: Elapsed time: %f\n", end - start);
 	MPI_Finalize();
     	return 0;
 }
